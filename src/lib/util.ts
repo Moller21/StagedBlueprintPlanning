@@ -9,7 +9,7 @@
  * You should have received a copy of the GNU General Public License along with BBPP3. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Mutable } from "./util-types"
+import { Mutable, Owned } from "./util-types"
 
 export function shallowCopy<T extends object>(obj: T): T {
   const result: Partial<T> = {}
@@ -19,6 +19,11 @@ export function shallowCopy<T extends object>(obj: T): T {
   return result as T
 }
 export const mutableShallowCopy: <T extends object>(obj: T) => Mutable<T> = shallowCopy
+export const ownedShallowCopy: <T extends object>(obj: T) => Owned<T> = shallowCopy as any
+
+export function assertOwnership<T extends object>(obj: T): Owned<T> {
+  return obj as Owned<T>
+}
 
 // does NOT copy metatables
 export function deepCopy<T extends object>(obj: T): T {

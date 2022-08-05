@@ -24,6 +24,9 @@ export type PRRecord<K extends keyof any, V> = {
 export type Mutable<T> = {
   -readonly [P in keyof T]: T[P]
 }
+export type Owned<T> = Mutable<T> & {
+  _ownershipBrand: never
+}
 
 export type Building<T> = {
   -readonly [P in keyof T]?: T[keyof T]

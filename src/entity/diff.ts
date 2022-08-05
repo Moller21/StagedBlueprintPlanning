@@ -9,7 +9,7 @@
  * You should have received a copy of the GNU General Public License along with BBPP3. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { deepCompare, Events, Mutable, nilIfEmpty } from "../lib"
+import { deepCompare, Events, nilIfEmpty, Owned } from "../lib"
 import { Entity } from "./Entity"
 
 declare const NilPlaceholder: unique symbol
@@ -33,7 +33,7 @@ export function getNilPlaceholder(): NilPlaceholder {
 }
 
 const ignoredProps = newLuaSet<keyof any>("position", "direction")
-export function getEntityDiff<E extends Entity = Entity>(below: E, above: E): LayerDiff<E> | nil {
+export function getEntityDiff<E extends Entity = Entity>(below: E, above: E): Owned<LayerDiff<E>> | nil {
   const changes: any = {}
   for (const [key, value] of pairs(above)) {
     if (!ignoredProps.has(key) && !deepCompare(value, below[key])) {
@@ -45,12 +45,12 @@ export function getEntityDiff<E extends Entity = Entity>(below: E, above: E): La
   }
   return nilIfEmpty(changes)
 }
-export function applyDiffToDiff<E extends Entity = Entity>(existing: Mutable<LayerDiff<E>>, diff: LayerDiff<E>): void {
+export function applyDiffToDiff<E extends Entity = Entity>(existing: Owned<LayerDiff<E>>, diff: LayerDiff<E>): void {
   for (const [key, value] of pairs(diff)) {
     existing[key] = value as any
   }
 }
-export function applyDiffToEntity<E extends Entity = Entity>(entity: Mutable<E>, diff: LayerDiff<E>): void {
+export function applyDiffToEntity<E extends Entity = Entity>(entity: Owned<E>, diff: LayerDiff<E>): void {
   for (const [key, value] of pairs(diff)) {
     if (value === nilPlaceholder) {
       delete entity[key]

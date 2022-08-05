@@ -9,6 +9,7 @@
  * You should have received a copy of the GNU General Public License along with BBPP3. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import { assertOwnership } from "../lib"
 import { applyDiffToEntity, getEntityDiff, getNilPlaceholder } from "./diff"
 
 const entity1 = {
@@ -38,6 +39,6 @@ test("getEntityDiff", () => {
 test("applyDiffToEntity", () => {
   const diff = getEntityDiff(entity1, entity2)!
   const entity = { ...entity1 }
-  applyDiffToEntity(entity, diff)
+  applyDiffToEntity(assertOwnership(entity), diff)
   assert.same(entity2, entity)
 })
