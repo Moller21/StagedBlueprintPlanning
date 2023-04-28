@@ -17,6 +17,7 @@ import {
   RollingStockAssemblyEntity,
   StageNumber,
 } from "../entity/AssemblyEntity"
+import { getEntityOfConnectionPoint } from "../entity/cable-connection"
 import { isPreviewEntity } from "../entity/entity-prototype-info"
 import { EntityDollyResult, forceDollyEntity, tryDollyAllEntities } from "../entity/picker-dollies"
 import { createEntity, createPreviewEntity, updateEntity } from "../entity/save-load"
@@ -226,7 +227,8 @@ function checkConnectionWorldEntityExists(
   const cableConnected = content.getCableConnections(entity)
   if (cableConnected) {
     for (const other of cableConnected) {
-      if (!other.hasWorldEntityInRange(startStage, endStage)) return false
+      const entity = getEntityOfConnectionPoint(other)
+      if (!entity.hasWorldEntityInRange(startStage, endStage)) return false
     }
   }
   const circuitConnections = content.getCircuitConnections(entity)

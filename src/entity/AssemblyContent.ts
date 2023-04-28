@@ -13,8 +13,14 @@ import { oppositedirection } from "util"
 import { Prototypes } from "../constants"
 import { isEmpty, RegisterClass } from "../lib"
 import { BBox, Position } from "../lib/geometry"
-import { AsmCircuitConnection, circuitConnectionEquals } from "./AsmCircuitConnection"
 import { AssemblyEntity, StageNumber, UndergroundBeltAssemblyEntity } from "./AssemblyEntity"
+import {
+  CableConnectionPoint,
+  getEntityOfConnectionPoint,
+  isPowerSwitchConnectionPoint,
+  PowerSwitchConnectionPoint,
+} from "./cable-connection"
+import { AsmCircuitConnection, circuitConnectionEquals } from "./circuit-connection"
 import { EntityIdentification } from "./Entity"
 import {
   EntityPrototypeInfo,
@@ -55,7 +61,7 @@ export interface AssemblyContent {
   findCompatibleFromLuaEntityOrPreview(entity: LuaEntity, stage: StageNumber): AssemblyEntity | nil
 
   getCircuitConnections(entity: AssemblyEntity): AsmEntityCircuitConnections | nil
-  getCableConnections(entity: AssemblyEntity): AsmEntityCableConnections | nil
+  getCableConnections(entity: CableConnectionPoint): AsmEntityCableConnections | nil
 
   countNumEntities(): number
   iterateAllEntities(): LuaPairsKeyIterable<AssemblyEntity>
@@ -67,10 +73,10 @@ export interface AssemblyContent {
 }
 
 export const enum CableAddResult {
-  Added,
-  Error,
-  AlreadyExists,
-  MaxConnectionsReached,
+  Added = "Added",
+  Error = "Error",
+  AlreadyExists = "AlreadyExists",
+  MaxConnectionsReached = "MaxConnectionsReached",
 }
 const MaxCableConnections = 5 // hard-coded in game
 
@@ -84,8 +90,8 @@ export interface MutableAssemblyContent extends AssemblyContent {
   addCircuitConnection(circuitConnection: AsmCircuitConnection): boolean
   removeCircuitConnection(circuitConnection: AsmCircuitConnection): void
 
-  addCableConnection(entity1: AssemblyEntity, entity2: AssemblyEntity): CableAddResult
-  removeCableConnection(entity1: AssemblyEntity, entity2: AssemblyEntity): void
+  addCableConnection(point1: CableConnectionPoint, point2: CableConnectionPoint): CableAddResult
+  removeCableConnection(point1: CableConnectionPoint, point2: CableConnectionPoint): void
 
   /** Modifies all entities */
   insertStage(stageNumber: StageNumber): void
@@ -93,7 +99,7 @@ export interface MutableAssemblyContent extends AssemblyContent {
 }
 
 export type AsmEntityCircuitConnections = LuaMap<AssemblyEntity, LuaSet<AsmCircuitConnection>>
-export type AsmEntityCableConnections = LuaSet<AssemblyEntity>
+export type AsmEntityCableConnections = LuaSet<CableConnectionPoint>
 
 let nameToType: EntityPrototypeInfo["nameToType"]
 let nameToCategory: EntityPrototypeInfo["nameToCategory"]
@@ -101,12 +107,17 @@ OnEntityPrototypesLoaded.addListener((i) => {
   ;({ nameToType, nameToCategory } = i)
 })
 
+type PowerSwitchConnectionPointKey = PowerSwitchConnectionPoint & { _isKey: never }
+type ConnectionPointKey = AssemblyEntity | PowerSwitchConnectionPointKey
+
 @RegisterClass("EntityMap")
 class AssemblyContentImpl implements MutableAssemblyContent {
   readonly byPosition: Map2D<AssemblyEntity> = newMap2D()
   entities = new LuaSet<AssemblyEntity>()
   circuitConnections = new LuaMap<AssemblyEntity, AsmEntityCircuitConnections>()
-  cableConnections = new LuaMap<AssemblyEntity, AsmEntityCableConnections>()
+  cableConnections = new LuaMap<ConnectionPointKey, AsmEntityCableConnections>()
+  // currently only used for power switches
+  extraCableConnectionPoints?: LuaMap<AssemblyEntity, Record<any, PowerSwitchConnectionPointKey>>
 
   has(entity: AssemblyEntity): boolean {
     return this.entities.has(entity)
@@ -262,6 +273,13 @@ class AssemblyContentImpl implements MutableAssemblyContent {
 
     this.removeAllConnections(entity, this.circuitConnections)
     this.removeAllConnections(entity, this.cableConnections)
+    const extraPoints = this.extraCableConnectionPoints?.get(entity)
+    if (extraPoints) {
+      for (const [, point] of pairs(extraPoints)) {
+        this.removeAllConnections(point, this.cableConnections)
+      }
+      this.extraCableConnectionPoints!.delete(entity)
+    }
   }
 
   changePosition(entity: AssemblyEntity, position: Position): boolean {
@@ -276,19 +294,24 @@ class AssemblyContentImpl implements MutableAssemblyContent {
     return true
   }
 
+  private removeAllConnections(entity: AssemblyEntity, map: LuaMap<AssemblyEntity, AsmEntityCircuitConnections>): void
   private removeAllConnections(
-    entity: AssemblyEntity,
-    map: LuaMap<AssemblyEntity, AsmEntityCircuitConnections> | LuaMap<AssemblyEntity, AsmEntityCableConnections>,
+    entity: ConnectionPointKey,
+    map: LuaMap<ConnectionPointKey, AsmEntityCableConnections>,
+  ): void
+  private removeAllConnections(
+    key: CableConnectionPoint,
+    map: LuaMap<any, AsmEntityCableConnections> | LuaMap<any, AsmEntityCircuitConnections>,
   ) {
-    const entityData = map.get(entity)
+    const entityData = map.get(key)
     if (!entityData) return
-    map.delete(entity)
+    map.delete(key)
 
-    for (const otherEntity of entityData as LuaSet<AssemblyEntity>) {
-      const otherData = map.get(otherEntity)
+    for (const otherKey of entityData as LuaSet<ConnectionPointKey>) {
+      const otherData = map.get(otherKey)
       if (otherData) {
-        otherData.delete(entity)
-        if (isEmpty(otherData)) map.delete(otherEntity)
+        otherData.delete(key as any)
+        if (isEmpty(otherData)) map.delete(otherKey)
       }
     }
   }
@@ -370,57 +393,99 @@ class AssemblyContentImpl implements MutableAssemblyContent {
     }
   }
 
-  getCableConnections(entity: AssemblyEntity): AsmEntityCableConnections | nil {
-    return this.cableConnections.get(entity)
+  getCableConnections(entity: CableConnectionPoint): AsmEntityCableConnections | nil {
+    const key = this.getConnectionPointKey(entity)
+    return key && this.cableConnections.get(key)
   }
 
-  addCableConnection(entity1: AssemblyEntity, entity2: AssemblyEntity): CableAddResult {
-    if (entity1 == entity2) return CableAddResult.Error
+  getConnectionPointKey(point: CableConnectionPoint, createIfAbsent: true): ConnectionPointKey
+  getConnectionPointKey(point: CableConnectionPoint): ConnectionPointKey | nil
+  getConnectionPointKey(point: CableConnectionPoint, createIfAbsent?: true): ConnectionPointKey | nil {
+    if (!isPowerSwitchConnectionPoint(point)) {
+      return point
+    }
+    const map = (this.extraCableConnectionPoints ??= new LuaMap())
+    let thisEntity = map.get(point.entity)
+    if (!thisEntity) {
+      if (!createIfAbsent) return nil
+      thisEntity = {}
+      map.set(point.entity, thisEntity)
+    }
+    const existing = thisEntity[point.connectionId]
+    if (existing != nil) return existing
+    if (!createIfAbsent) return nil
+    return (thisEntity[point.connectionId] = point as PowerSwitchConnectionPointKey)
+  }
+
+  addCableConnection(_point1: CableConnectionPoint, _point2: CableConnectionPoint): CableAddResult {
     const { entities, cableConnections } = this
+    const entity1 = getEntityOfConnectionPoint(_point1),
+      entity2 = getEntityOfConnectionPoint(_point2)
+    if (entity1 == entity2) return CableAddResult.Error
     if (!entities.has(entity1) || !entities.has(entity2)) return CableAddResult.Error
-    let data1 = cableConnections.get(entity1)
-    let data2 = cableConnections.get(entity2)
+    const key1 = this.getConnectionPointKey(_point1, true),
+      key2 = this.getConnectionPointKey(_point2, true)
+
+    let data1 = cableConnections.get(key1)
+    let data2 = cableConnections.get(key2)
 
     if (data1) {
-      if (data1.has(entity2)) return CableAddResult.AlreadyExists
+      if (data1.has(key2)) return CableAddResult.AlreadyExists
       if (table_size(data1) >= MaxCableConnections) return CableAddResult.MaxConnectionsReached
     }
     if (data2) {
-      if (data2.has(entity1)) return CableAddResult.AlreadyExists
+      if (data2.has(key1)) return CableAddResult.AlreadyExists
       if (table_size(data2) >= MaxCableConnections) return CableAddResult.MaxConnectionsReached
     }
 
+    if (data1 && isPowerSwitchConnectionPoint(_point1)) {
+      this.removeCableConnection(next(data1)[0], key1)
+      data1 = cableConnections.get(key1)
+    }
+    if (data2 && isPowerSwitchConnectionPoint(_point2)) {
+      this.removeCableConnection(next(data2)[0], key2)
+      data2 = cableConnections.get(key2)
+    }
+
     if (data1) {
-      data1.add(entity2)
+      data1.add(key2)
     } else {
-      data1 = newLuaSet(entity2)
-      cableConnections.set(entity1, data1)
+      data1 = newLuaSet<CableConnectionPoint>(key2)
+      cableConnections.set(key1, data1)
     }
 
     if (data2) {
-      data2.add(entity1)
+      data2.add(key1)
     } else {
-      data2 = newLuaSet(entity1)
-      cableConnections.set(entity2, data2)
+      data2 = newLuaSet<CableConnectionPoint>(key1)
+      cableConnections.set(key2, data2)
     }
 
     return CableAddResult.Added
   }
 
-  removeCableConnection(entity1: AssemblyEntity, entity2: AssemblyEntity): void {
-    const { cableConnections } = this
-    const data1 = cableConnections.get(entity1)
+  removeCableConnection(_point1: CableConnectionPoint, _point2: CableConnectionPoint): void {
+    const entity1 = getEntityOfConnectionPoint(_point1),
+      entity2 = getEntityOfConnectionPoint(_point2)
+    const { cableConnections, entities } = this
+    if (entity1 == entity2 || !entities.has(entity1) || !entities.has(entity2)) return
+
+    const key1 = this.getConnectionPointKey(_point1),
+      key2 = this.getConnectionPointKey(_point2)
+    if (!key1 || !key2) return
+
+    const data1 = cableConnections.get(key1)
     if (data1) {
-      data1.delete(entity2)
+      data1.delete(key2)
       if (isEmpty(data1)) {
-        cableConnections.delete(entity1)
+        cableConnections.delete(key1)
       }
     }
-    const data2 = cableConnections.get(entity2)
+    const data2 = cableConnections.get(key2)
     if (data2) {
-      data2.delete(entity1)
+      data2.delete(key1)
       if (isEmpty(data2)) {
-        cableConnections.delete(entity2)
+        cableConnections.delete(key2)
       }
     }
   }
@@ -438,6 +503,48 @@ class AssemblyContentImpl implements MutableAssemblyContent {
 
   __tostring(): string {
     return `AssemblyContent(${this.countNumEntities()} entities)`
+  }
+}
+export function _assertCorrect(content: AssemblyContent): void {
+  assume<AssemblyContentImpl>(content)
+  const { entities } = content
+  for (const [entity, points] of content.circuitConnections) {
+    assert(entities.has(entity))
+
+    for (const [otherEntity, connections] of points) {
+      assert(entities.has(otherEntity))
+      for (const connection of connections) {
+        assert(content.circuitConnections.get(otherEntity)!.get(entity)!.has(connection))
+      }
+    }
+  }
+
+  for (const [point, connections] of content.cableConnections) {
+    const entity = getEntityOfConnectionPoint(point)
+    if (isPowerSwitchConnectionPoint(point)) {
+      assert(content.getConnectionPointKey(point) != nil)
+    }
+    assert(entities.has(entity))
+
+    for (const otherPoint of connections) {
+      const otherEntity = getEntityOfConnectionPoint(otherPoint)
+      if (isPowerSwitchConnectionPoint(otherPoint)) {
+        assert(content.getConnectionPointKey(otherPoint) != nil)
+      }
+      assert(entities.has(otherEntity))
+      assert(content.cableConnections.get(otherPoint as ConnectionPointKey)!.has(point))
+    }
+  }
+
+  if (content.extraCableConnectionPoints) {
+    for (const [entity, points] of content.extraCableConnectionPoints) {
+      assert(entities.has(entity))
+      for (const [connectionId, point] of pairs(points)) {
+        assert(isPowerSwitchConnectionPoint(point))
+        assert(content.getConnectionPointKey(point) != nil)
+        assert(point.connectionId == connectionId)
+      }
+    }
   }
 }
 

@@ -9,10 +9,11 @@
  * You should have received a copy of the GNU Lesser General Public License along with Staged Blueprint Planning. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { isEmpty } from "../lib"
-import { AsmCircuitConnection, circuitConnectionMatches, getDirectionalInfo } from "./AsmCircuitConnection"
+import { _assert, isEmpty } from "../lib"
 import { AsmEntityCircuitConnections, AssemblyContent, CableAddResult, MutableAssemblyContent } from "./AssemblyContent"
 import { AssemblyEntity, StageNumber } from "./AssemblyEntity"
+import { isPowerSwitchConnectionPoint } from "./cable-connection"
+import { AsmCircuitConnection, circuitConnectionMatches, getDirectionalInfo } from "./circuit-connection"
 
 function updateCircuitConnections(
   content: MutableAssemblyContent,
@@ -77,6 +78,7 @@ function updateCableConnections(
 
   if (assemblyConnections) {
     for (const otherEntity of assemblyConnections) {
+      _assert(!isPowerSwitchConnectionPoint(otherEntity))
       const otherLuaEntity = otherEntity.getWorldEntity(stage)
       if (otherLuaEntity && !matching.has(otherEntity)) {
         if (!luaEntity.connect_neighbour(otherLuaEntity)) return false
@@ -201,7 +203,8 @@ function saveCableConnections(
   // remove first, to not exceed max connections
   if (savedConnections) {
     for (const otherEntity of savedConnections) {
-      // check other lua entity exists; if not, don't remove
+      _assert(!isPowerSwitchConnectionPoint(otherEntity))
+      // check that the other lua entity exists; if not, don't remove
       if (!matchingConnections.has(otherEntity) && otherEntity.getWorldEntity(stage)) {
         content.removeCableConnection(entity, otherEntity)
         hasDiff = true

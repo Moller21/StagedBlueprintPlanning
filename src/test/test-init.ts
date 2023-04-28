@@ -159,7 +159,7 @@ Events.on_tick(() => {
     Migrations.doMigrations(script.active_mods[script.mod_name])
   }
 
-  const ticks = math.ceil((__DebugAdapter ? 20 : 5) * 60 * game.speed)
+  const ticks = math.ceil((__DebugAdapter ? 20 : 3) * 60 * game.speed)
   const mod = game.ticks_played % ticks
   if (mod == 0) {
     global.lastCompileTimestamp = lastCompileTime

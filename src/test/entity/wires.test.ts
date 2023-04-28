@@ -10,9 +10,9 @@
  */
 
 import expect from "tstl-expect"
-import { AsmCircuitConnection } from "../../entity/AsmCircuitConnection"
 import { CableAddResult, MutableAssemblyContent, newAssemblyContent } from "../../entity/AssemblyContent"
 import { AssemblyEntity, createAssemblyEntity } from "../../entity/AssemblyEntity"
+import { AsmCircuitConnection } from "../../entity/circuit-connection"
 import { shallowCompare } from "../../lib"
 import { setupTestSurfaces } from "../assembly/Assembly-mock"
 

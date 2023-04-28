@@ -10,9 +10,14 @@
  */
 
 import expect from "tstl-expect"
-import { AsmCircuitConnection } from "../../entity/AsmCircuitConnection"
-import { CableAddResult, MutableAssemblyContent, newAssemblyContent } from "../../entity/AssemblyContent"
+import {
+  _assertCorrect,
+  CableAddResult,
+  MutableAssemblyContent,
+  newAssemblyContent,
+} from "../../entity/AssemblyContent"
 import { AssemblyEntity, createAssemblyEntity } from "../../entity/AssemblyEntity"
+import { AsmCircuitConnection } from "../../entity/circuit-connection"
 import { LuaEntityInfo } from "../../entity/Entity"
 import { getPasteRotatableType, PasteCompatibleRotationType } from "../../entity/entity-prototype-info"
 import { setupTestSurfaces } from "../assembly/Assembly-mock"
@@ -21,6 +26,9 @@ import { createRollingStocks } from "./createRollingStock"
 let content: MutableAssemblyContent
 before_each(() => {
   content = newAssemblyContent()
+})
+after_each(() => {
+  _assertCorrect(content)
 })
 const surfaces = setupTestSurfaces(1)
 
@@ -338,7 +346,7 @@ describe("connections", () => {
 
     test("removeCableConnection removes connection", () => {
       content.addCableConnection(entity1, entity2)
-      content.removeCableConnection(entity1, entity2)
+      content.removeCableConnection(entity2, entity1)
 
       expect(content.getCableConnections(entity1) ?? nil).to.equal(nil)
       expect(content.getCableConnections(entity2) ?? nil).to.equal(nil)
@@ -367,6 +375,120 @@ describe("connections", () => {
         expect(content.addCableConnection(entity1, entity)).to.be(CableAddResult.Added)
       }
       expect(content.addCableConnection(entity1, entity2)).to.be(CableAddResult.MaxConnectionsReached)
+    })
+  })
+
+  describe("cable connections to power switch", () => {
+    test("getCableConnections on power switch initially empty", () => {
+      expect(content.getCableConnections(entity1)).to.be(nil)
+      expect(
+        content.getCableConnections({
+          entity: entity1,
+          connectionId: 1,
+        }),
+      ).to.be(nil)
+    })
+
+    test.each([1, 2])("can connect power switch to pole and shows up in getCableConnections in order %s", (order) => {
+      if (order == 1) {
+        expect(content.addCableConnection(entity1, { entity: entity2, connectionId: 1 })).to.be(CableAddResult.Added)
+      } else {
+        expect(content.addCableConnection({ entity: entity2, connectionId: 1 }, entity1)).to.be(CableAddResult.Added)
+      }
+      expect(Object.keys(content.getCableConnections(entity1)!)).to.equal([{ entity: entity2, connectionId: 1 }])
+      expect(content.getCableConnections({ entity: entity2, connectionId: 1 })!).to.equal(newLuaSet(entity1))
+
+      expect(content.getCableConnections(entity2)!).to.equal(nil)
+
+      expect(content.getCableConnections({ entity: entity2, connectionId: 2 })!).to.equal(nil)
+      expect(content.getCableConnections({ entity: entity1, connectionId: 1 })!).to.equal(nil)
+    })
+
+    test("can remove cable connection from power switch", () => {
+      content.addCableConnection(entity1, { entity: entity2, connectionId: 1 })
+      content.removeCableConnection({ entity: entity2, connectionId: 1 }, entity1)
+      expect(content.getCableConnections(entity1)!).to.equal(nil)
+      expect(content.getCableConnections({ entity: entity2, connectionId: 1 })!).to.equal(nil)
+    })
+
+    test("deleting pole removes connection to power switch", () => {
+      content.addCableConnection(entity1, { entity: entity2, connectionId: 1 })
+      content.delete(entity1)
+      expect(content.getCableConnections(entity1)!).to.equal(nil)
+      expect(content.getCableConnections({ entity: entity2, connectionId: 1 })!).to.equal(nil)
+    })
+
+    test("deleting power switch removes connection to pole", () => {
+      content.addCableConnection(entity1, { entity: entity2, connectionId: 1 })
+      content.delete(entity2)
+      expect(content.getCableConnections(entity1)!).to.equal(nil)
+      expect(content.getCableConnections({ entity: entity2, connectionId: 1 })!).to.equal(nil)
+    })
+
+    test("can't connect power switch to itself", () => {
+      expect(
+        content.addCableConnection({ entity: entity1, connectionId: 1 }, { entity: entity1, connectionId: 2 }),
+      ).to.be(CableAddResult.Error)
+      expect(
+        content.addCableConnection({ entity: entity1, connectionId: 1 }, { entity: entity1, connectionId: 1 }),
+      ).to.be(CableAddResult.Error)
+    })
+
+    test("adding same cable twice does nothing", () => {
+      expect(content.addCableConnection(entity1, { entity: entity2, connectionId: 1 })).to.be(CableAddResult.Added)
+      expect(content.addCableConnection(entity1, { entity: entity2, connectionId: 1 })).to.be(
+        CableAddResult.AlreadyExists,
+      )
+    })
+
+    test("won't add if max connections is reached", () => {
+      for (let i = 3; i < 3 + 5; i++) {
+        const entity = makeAssemblyEntity(i)
+        content.add(entity)
+        expect(content.addCableConnection(entity1, entity))
+      }
+      expect(content.addCableConnection(entity1, { entity: entity2, connectionId: 1 })).to.be(
+        CableAddResult.MaxConnectionsReached,
+      )
+    })
+
+    test("adding to same power switch connection point replaces old connection", () => {
+      const entity3 = makeAssemblyEntity(3)
+      content.add(entity3)
+      expect(content.addCableConnection(entity1, { entity: entity3, connectionId: 1 })).to.be(CableAddResult.Added)
+
+      expect(content.addCableConnection(entity2, { entity: entity3, connectionId: 1 })).to.be(CableAddResult.Added)
+
+      expect(content.getCableConnections(entity1)!).to.equal(nil)
+      expect(Object.keys(content.getCableConnections(entity2)!)).to.equal([{ entity: entity3, connectionId: 1 }])
+      expect(content.getCableConnections({ entity: entity3, connectionId: 1 })!).to.equal(newLuaSet(entity2))
+
+      expect(content.addCableConnection({ entity: entity3, connectionId: 1 }, entity1)).to.be(CableAddResult.Added)
+
+      expect(content.getCableConnections(entity2)!).to.equal(nil)
+      expect(Object.keys(content.getCableConnections(entity1)!)).to.equal([{ entity: entity3, connectionId: 1 }])
+      expect(content.getCableConnections({ entity: entity3, connectionId: 1 })!).to.equal(newLuaSet(entity1))
+    })
+
+    test("does not replace old connection if max connections is reached on other entity", () => {
+      for (let i = 4; i < 4 + 5; i++) {
+        const entity = makeAssemblyEntity(i)
+        content.add(entity)
+        expect(content.addCableConnection(entity1, entity)).to.be(CableAddResult.Added)
+      }
+
+      const entity3 = makeAssemblyEntity(3)
+      // 3 is power switch
+      // connect 2-3
+      // connecting 1-3 should fail and preserve 2-3
+
+      content.add(entity3)
+      expect(content.addCableConnection(entity2, { entity: entity3, connectionId: 1 })).to.be(CableAddResult.Added)
+      expect(content.addCableConnection(entity1, { entity: entity3, connectionId: 1 })).to.be(
+        CableAddResult.MaxConnectionsReached,
+      )
+
+      expect(content.getCableConnections({ entity: entity3, connectionId: 1 })!).to.equal(newLuaSet(entity2))
     })
   })
 })

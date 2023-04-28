@@ -59,6 +59,8 @@ export function assertNever(value: never): never {
   error("should not be reachable: " + serpent.block(value))
 }
 
+export const _assert: (this: void, condition: boolean, message?: string) => asserts condition = assert as any
+
 export function shiftNumberKeysUp(obj: PRecord<any, any>, number: number): void {
   const keysToChange: number[] = []
   for (const [changeStage] of pairs(obj)) {

@@ -40,12 +40,13 @@ import {
   tryDollyEntities,
 } from "../../assembly/world-entity-updates"
 import { Prototypes, Settings } from "../../constants"
-import { AsmCircuitConnection, circuitConnectionEquals } from "../../entity/AsmCircuitConnection"
 import { AssemblyEntity, RollingStockAssemblyEntity, StageNumber } from "../../entity/AssemblyEntity"
+import { isPowerSwitchConnectionPoint } from "../../entity/cable-connection"
+import { AsmCircuitConnection, circuitConnectionEquals } from "../../entity/circuit-connection"
 import { emptyBeltControlBehavior, emptyInserterControlBehavior } from "../../entity/empty-control-behavior"
 import { isPreviewEntity } from "../../entity/entity-prototype-info"
 import { saveEntity } from "../../entity/save-load"
-import { Events } from "../../lib"
+import { _assert, Events } from "../../lib"
 import { BBox, Pos } from "../../lib/geometry"
 import { createRollingStock } from "../entity/createRollingStock"
 import {
@@ -151,7 +152,10 @@ function assertEntityCorrect(entity: AssemblyEntity, expectedHasMissing: boolean
     const otherNeighbors = Object.keys(cableConnections)
     for (const stage of $range(entity.firstStage, assembly.lastStageFor(entity))) {
       const expectedNeighbors = otherNeighbors
-        .map((o) => o.getWorldEntity(stage))
+        .map((o) => {
+          _assert(!isPowerSwitchConnectionPoint(o))
+          return o.getWorldEntity(stage)
+        })
         .filter((o) => o)
         .map((o) => o?.unit_number)
         .sort()
