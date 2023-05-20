@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 GlassBricks
+ * Copyright (c) 2022-2023 GlassBricks
  * This file is part of Staged Blueprint Planning.
  *
  * Staged Blueprint Planning is free software: you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
@@ -101,6 +101,23 @@ export interface RailPieceLayers {
   stone_path: Sprite
 }
 
+export interface TilePrototype extends PrototypeBase {
+  type: "tile"
+  collision_mask?: Array<keyof CollisionMaskWithFlags>
+  layer: number
+  variants: unknown
+  map_color: Color | ColorArray
+  pollution_absorption_per_second: number
+
+  minable?: MinableProperties
+  can_be_part_of_blueprint: boolean
+  check_collision_with_entities: boolean
+
+  icon?: string
+  icons?: IconData[]
+  icon_size?: number
+}
+
 export interface ItemPrototype extends PrototypeBase {
   icons?: IconData[]
   icon_size?: number
@@ -112,6 +129,11 @@ export interface ItemPrototype extends PrototypeBase {
   stack_size: number
   flags?: Array<keyof ItemPrototypeFlags>
   place_result?: string
+  place_as_tile?: {
+    result: string
+    condition_size: number
+    condition: CollisionMaskLayer[]
+  }
 }
 export interface SelectionToolPrototype extends Omit<ItemPrototype, "type"> {
   type: "selection-tool"
@@ -306,7 +328,6 @@ export interface ItemToPlace {
 }
 
 export interface MinableProperties {
-  // results: ProductPrototype
   mining_time: number
   result?: string
 }
