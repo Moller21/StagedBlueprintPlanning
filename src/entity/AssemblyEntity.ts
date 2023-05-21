@@ -150,13 +150,13 @@ export interface AssemblyEntity<out T extends Entity = Entity> {
   movePropDown<K extends keyof T>(stage: StageNumber, prop: K): StageNumber | nil
 
   /**
-   * Sets the first stage. If moving up, deletes/merges all stage diffs from old stage to new stage.
+   * Sets the first stage. If moving up, deletes/merges all the stage diffs from old stage to new stage.
    * @return the previous first stage
    */
   setFirstStageUnchecked(stage: StageNumber): StageNumber
 
   /**
-   * Sets the last stage. If moving down, deletes all diffs after the new last stage.
+   * Sets the last stage. If moving down, this deletes all diffs after the new last stage.
    */
   setLastStageUnchecked(stage: StageNumber | nil): void
 
@@ -812,6 +812,7 @@ const excludedTypes: Record<string, true> = {
   car: true,
   "spider-vehicle": true,
   "entity-ghost": true,
+  "tile-ghost": true,
 }
 
 export function isWorldEntityAssemblyEntity(luaEntity: LuaEntity): boolean {

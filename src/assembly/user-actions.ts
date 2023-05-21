@@ -273,7 +273,17 @@ export function onWiresPossiblyUpdated(
   byPlayer: PlayerIndex | nil,
 ): void {
   const asmEntity = getCompatibleEntityOrAdd(assembly, entity, stage, nil, byPlayer)
-  if (!asmEntity) return
+  if (asmEntity) {
+    onWiresPossiblyUpdatedOnAsmEntity(assembly, asmEntity, stage, byPlayer)
+  }
+}
+
+export function onWiresPossiblyUpdatedOnAsmEntity(
+  assembly: Assembly,
+  asmEntity: AssemblyEntity,
+  stage: StageNumber,
+  byPlayer: PlayerIndex | nil,
+): void {
   const result = updateWiresFromWorld(assembly, asmEntity, stage)
   if (result == "max-connections-exceeded") {
     createNotification(asmEntity, byPlayer, [L_Interaction.MaxConnectionsReachedInAnotherStage], true)
@@ -281,6 +291,7 @@ export function onWiresPossiblyUpdated(
     assertNever(result)
   }
 }
+
 export function onEntityMarkedForUpgrade(
   assembly: Assembly,
   entity: LuaEntity,

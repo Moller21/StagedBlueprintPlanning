@@ -10,20 +10,13 @@
  */
 
 import { oppositedirection } from "util"
-import { CustomInputs, Prototypes, Settings } from "../constants"
+import { CustomInputs, Prototypes } from "../constants"
 import { DollyMovedEntityEvent } from "../declarations/PickerDollies"
-import { isWorldEntityAssemblyEntity, StageNumber } from "../entity/AssemblyEntity"
+import { AssemblyEntity, isWorldEntityAssemblyEntity, StageNumber } from "../entity/AssemblyEntity"
 import { LuaEntityInfo } from "../entity/Entity"
-import {
-  areUpgradeableTypes,
-  EntityPrototypeInfo,
-  getCompatibleNames,
-  getPasteRotatableType,
-  OnEntityPrototypesLoaded,
-  PasteCompatibleRotationType,
-} from "../entity/entity-prototype-info"
-import { assertNever, PRecord, ProtectedEvents } from "../lib"
-import { Pos } from "../lib/geometry"
+import { areUpgradeableTypes } from "../entity/entity-prototype-info"
+import { ProtectedEvents } from "../lib"
+import { Pos, Position } from "../lib/geometry"
 import { L_Interaction } from "../locale"
 import { Assembly, Stage } from "./AssemblyDef"
 import { getAssemblyPlayerData } from "./player-assembly-data"
@@ -53,6 +46,7 @@ import {
   onTryFixEntity,
   onUndergroundBeltDragRotated,
   onWiresPossiblyUpdated,
+  onWiresPossiblyUpdatedOnAsmEntity,
 } from "./user-actions"
 import { getStageAtSurface } from "./UserAssembly"
 
@@ -72,10 +66,6 @@ function getStageAtEntityOrPreview(entity: LuaEntity): Stage | nil {
 
 function luaEntityCreated(entity: LuaEntity, player: PlayerIndex | nil): void {
   if (!entity.valid) return
-  if (getInnerName(entity) == Prototypes.EntityMarker) {
-    entity.destroy()
-    return
-  }
   const stage = getStageAtSurface(entity.surface.index)
   if (!stage) return
   if (!isWorldEntityAssemblyEntity(entity)) {
@@ -231,6 +221,7 @@ interface ToBeFastReplacedEntity extends LuaEntityInfo {
 }
 // in global, so no desync in case of bugs
 let state: {
+  // not set for blueprints
   lastPreBuild?: {
     event: OnPreBuildEvent
     item: string | nil
@@ -243,12 +234,10 @@ let state: {
   currentBlueprintPaste?: {
     stage: Stage
     entities: BlueprintEntity[]
-    knownLuaEntities: PRecord<number, LuaEntity>
-    needsManualConnections: number[]
-    originalNumEntities: number
-    allowPasteUpgrades: boolean
-    usedPasteUpgrade?: boolean
-    isFlipped: boolean
+    tiles: Tile[]
+    markerPosition: Position
+    event: OnPreBuildEvent
+    blueprint: BlueprintItemStack
   }
 
   accumulatedUndoActions?: UndoAction[]
@@ -318,7 +307,7 @@ Events.on_pre_build((e) => {
   const surface = player.surface
   if (player.is_cursor_blueprint()) {
     const stage = getStageAtSurface(surface.index)
-    onPreBlueprintPasted(player, stage, e)
+    if (stage) onPreBlueprintPasted(player, stage, e)
     return
   }
 
@@ -432,14 +421,13 @@ Events.on_built_entity((e) => {
     return onUndoReferenceBuilt(e.player_index, entity)
   }
 
-  const currentBlueprintPaste = state.currentBlueprintPaste
-  if (currentBlueprintPaste) {
-    if (innerName == Prototypes.EntityMarker) onEntityMarkerBuilt(e, entity)
-    return
-  }
-  // just in case
-  if (innerName == Prototypes.EntityMarker) {
-    entity.destroy()
+  if (state.currentBlueprintPaste) {
+    if (entity.type == "tile-ghost" && entity.ghost_name == Prototypes.BlueprintPositionMarker) {
+      const position = entity.position
+      entity.destroy()
+      onBlueprintPasted(state.currentBlueprintPaste, position)
+      state.currentBlueprintPaste = nil
+    }
     return
   }
 
@@ -451,23 +439,17 @@ Events.on_built_entity((e) => {
 
   const playerIndex = e.player_index
 
-  // also handles instant upgrade planner
-  if (tryFastReplace(entity, stage, playerIndex)) return
-
-  if (lastPreBuild == nil) {
-    // editor mode build, marker entity, or multiple-entities in one build
-    onEntityCreated(stage.assembly, entity, stage.stageNumber, playerIndex)
-    return
-  }
-
   if (!isWorldEntityAssemblyEntity(entity)) {
     checkNonAssemblyEntity(entity, stage, playerIndex)
     return
   }
 
+  if (tryFastReplace(entity, stage, playerIndex)) return
+
   // finally, normal build
   const undoAction = onEntityCreated(stage.assembly, entity, stage.stageNumber, playerIndex)
-  if (undoAction) {
+  // if lastPreBuild is nil, that means some abnormal build happened, so we don't want to register undo action
+  if (lastPreBuild != nil && undoAction) {
     registerUndoActionLater(undoAction)
   }
 })
@@ -511,11 +493,10 @@ function isFastReplaceable(old: LuaEntityInfo, next: LuaEntityInfo): boolean {
 
 // Blueprinting
 // There is no event to detect if blueprint entities are _updated_; instead we use the following strategy:
-// When a blueprint is about to be pasted in a stage, we modify it to add entity markers at every entity
-// When the entity markers are pasted, the corresponding entity is updated
-// The blueprint is reverted after the paste, when the last entity marker is pasted
-
-const IsLastEntity = "bp100IsLastEntity"
+// add or modify a tile with "blueprint position marker" tile
+// this tile is placed _after_ all entities
+// then, manually find the positions of all entities relative to the marker, flipping and rotating as needed
+// find corresponding entities if they exist, and do updates
 
 interface MarkerTags extends Tags {
   referencedLuaIndex: number
@@ -542,128 +523,152 @@ function blueprintNeedsPreparation(stack: BlueprintItemStack): boolean {
   )
 }
 
-function fixOldBlueprint(entities: BlueprintEntity[]): void {
-  // old blueprint, remove old markers
-  const firstEntityMarker = entities.findIndex((e) => e.name == Prototypes.EntityMarker)
-  // remove all entities after the first entity marker
-  for (const i of $range(firstEntityMarker + 1, entities.length)) {
-    entities[i - 1] = nil!
-  }
-}
-
 /**
- * Returns entities and original num entities if successful, nil otherwise
- * @param stack
+ * Sets the blueprint position marker tile
  */
-function prepareBlueprintForStagePaste(stack: BlueprintItemStack): LuaMultiReturn<[BlueprintEntity[], number] | []> {
-  if (!blueprintNeedsPreparation(stack)) return $multi()
-  const entities = stack.get_blueprint_entities()
-  if (!entities) return $multi()
-
-  if (stack.cost_to_build[Prototypes.EntityMarker] != nil) fixOldBlueprint(entities)
-
-  const numEntities = entities.length
-  let nextIndex = numEntities + 1
-  for (const i of $range(1, numEntities)) {
-    const entity = entities[i - 1]
-    const { direction } = entity
-    const { name, position } = entity
-    entities[nextIndex - 1] = {
-      entity_number: nextIndex,
-      name: Prototypes.EntityMarker,
-      direction,
-      position,
-      tags: {
-        referencedName: name,
-        referencedLuaIndex: i,
-      } as MarkerTags,
-    }
-    nextIndex++
-  }
-  if (nextIndex == numEntities + 1) {
-    // add one anyway
-    entities[nextIndex - 1] = {
-      entity_number: nextIndex,
-      name: Prototypes.EntityMarker,
-      position: { x: 0, y: 0 },
-      tags: {},
-    }
-  }
-
-  entities[entities.length - 1].tags![IsLastEntity] = true
-
-  stack.set_blueprint_entities(entities)
-
-  return $multi(entities, numEntities)
-}
-
-function revertPreparedBlueprint(stack: BlueprintItemStack): void {
-  const current = assert(state.currentBlueprintPaste)
-  const entities = current.entities
-  for (const i of $range(entities.length, current.originalNumEntities + 1, -1)) {
-    entities[i - 1] = nil!
-  }
-  stack.set_blueprint_entities(entities)
-}
-
-function onPreBlueprintPasted(player: LuaPlayer, stage: Stage | nil, event: OnPreBuildEvent): void {
-  if (!stage) {
-    tryFixBlueprint(player)
-    return
-  }
+function onPreBlueprintPasted(player: LuaPlayer, stage: Stage, event: OnPreBuildEvent): void {
   const blueprint = getInnerBlueprint(player.cursor_stack)
   if (!blueprint) {
     player.print([L_Interaction.BlueprintNotHandled])
     return
   }
-  const [entities, numEntities] = prepareBlueprintForStagePaste(blueprint)
-  if (entities != nil) {
-    state.currentBlueprintPaste = {
-      stage,
-      entities,
-      knownLuaEntities: {},
-      needsManualConnections: [],
-      originalNumEntities: numEntities,
-      allowPasteUpgrades: player.mod_settings[Settings.UpgradeOnPaste].value as boolean,
-      isFlipped: event.flip_vertical != event.flip_horizontal,
-    }
+  if (!blueprintNeedsPreparation(blueprint)) return
+
+  const entities = blueprint.get_blueprint_entities()!
+
+  const markerPosition = Pos.floor(entities[0]!.position)
+
+  let tiles = blueprint.get_blueprint_tiles()
+  if (tiles && tiles.find((t) => t.position.x == markerPosition.x && t.position.y == markerPosition.y)) {
+    error("TODO: handle existing tiles")
+  }
+
+  tiles ??= []
+  tiles.push({
+    position: markerPosition,
+    name: Prototypes.BlueprintPositionMarker,
+  })
+  blueprint.set_blueprint_tiles(tiles)
+
+  state.currentBlueprintPaste = {
+    stage,
+    tiles,
+    entities,
+    markerPosition,
+    event,
+    blueprint,
   }
 }
 
-function tryFixBlueprint(player: LuaPlayer): void {
-  const blueprint = getInnerBlueprint(player.cursor_stack)
-  if (!blueprint) return
-  const entityCount = blueprint.get_blueprint_entity_count()
-  if (entityCount == 0) return
-  const lastTags = blueprint.get_blueprint_entity_tag(entityCount, IsLastEntity)
-  if (lastTags != nil) {
-    const entities = blueprint.get_blueprint_entities()!
-    fixOldBlueprint(entities)
-    blueprint.set_blueprint_entities(entities)
+Events.on_player_built_tile((e) => {
+  state.lastPreBuild = nil
+
+  const currentBlueprintPaste = state.currentBlueprintPaste
+  if (!currentBlueprintPaste || e.tile.name != Prototypes.BlueprintPositionMarker) return
+  state.currentBlueprintPaste = nil
+
+  const tile = e.tiles[0]
+  const position = tile.position
+
+  game.get_surface(e.surface_index)!.set_tiles([
+    {
+      name: tile.old_tile.name,
+      position,
+    },
+  ])
+
+  // todo: handle if tile was replaced
+
+  onBlueprintPasted(currentBlueprintPaste, position)
+})
+let knownLuaEntities: Record<number, LuaEntity | nil> = {}
+
+function onBlueprintPasted(
+  { stage, tiles, event, blueprint, entities, markerPosition }: typeof state.currentBlueprintPaste & AnyNotNil,
+  markerWorldPosition: Position,
+): void {
+  if (event.direction != 0 || event.flip_vertical || event.flip_horizontal) {
+    error("TODO: handle rotation and flipping")
   }
+
+  // revert blueprint
+  // todo: handle tile replacement
+  delete tiles[tiles.length - 1]
+  blueprint.set_blueprint_tiles(tiles)
+
+  const { x: cx, y: cy } = Pos.minus(markerWorldPosition, markerPosition)
+  const { assembly, stageNumber } = stage
+  const playerIndex = event.player_index
+
+  // cache everything
+  const find_entities_filtered = stage.surface.find_entities_filtered
+  const params = {
+    name: "",
+    position: { x: 0, y: 0 },
+    direction: 0 as number | nil,
+    limit: 1,
+  }
+  const paramsPos = params.position
+
+  knownLuaEntities = {}
+
+  const needsManualConnections: Array<{
+    luaEntity: LuaEntity
+    bpEntity: BlueprintEntity
+    asmEntity: AssemblyEntity
+  }> = []
+
+  for (const bpEntity of entities) {
+    const blueprintPosition = bpEntity.position
+    paramsPos.x = cx + blueprintPosition.x
+    paramsPos.y = cy + blueprintPosition.y
+    params.direction = bpEntity.direction
+    params.name = bpEntity.name
+
+    const luaEntity = find_entities_filtered(params)[0]
+    // todo: handle upgrades
+    if (!luaEntity) continue
+
+    // todo: optimization hacks
+
+    const asmEntity = onEntityPossiblyUpdated(assembly, luaEntity, stageNumber, nil, playerIndex, bpEntity)
+
+    if (bpEntity.neighbours || bpEntity.connections) {
+      // todo: handle connecting wires for upgrade
+      knownLuaEntities[bpEntity.entity_number] = luaEntity
+      if (asmEntity != nil) {
+        assert(luaEntity)
+        if (luaEntity.type == "transport-belt") {
+          // factorio bug? transport belts don't save circuit connections immediately when pasted
+          game.print("TODO: handle manual connections")
+          needsManualConnections.push({ luaEntity, bpEntity, asmEntity })
+        } else {
+          onWiresPossiblyUpdatedOnAsmEntity(assembly, asmEntity, stageNumber, playerIndex)
+        }
+      }
+    }
+  }
+
+  for (const { luaEntity, bpEntity, asmEntity } of needsManualConnections) {
+    manuallyConnectNeighbours(luaEntity, bpEntity.neighbours)
+    manuallyConnectCircuits(luaEntity, bpEntity.connections)
+    onWiresPossiblyUpdatedOnAsmEntity(assembly, asmEntity, stageNumber, playerIndex)
+  }
+
+  // todo: paste upgrade
 }
 
 Events.on_player_cursor_stack_changed((e) => {
-  tryFixBlueprint(game.get_player(e.player_index)!)
   state.lastPreBuild = nil
 })
 
 Events.on_player_changed_surface((e) => {
-  tryFixBlueprint(game.get_player(e.player_index)!)
   state.lastPreBuild = nil
 })
 
 function getInnerName(entity: LuaEntity): string {
   if (entity.type == "entity-ghost") return entity.ghost_name
   return entity.name
-}
-function onEntityMarkerBuilt(e: OnBuiltEntityEvent, entity: LuaEntity): void {
-  const tags = (e.tags ?? entity.tags) as MarkerTags
-  if (tags != nil) {
-    handleEntityMarkerBuilt(e, entity, tags)
-    if (tags[IsLastEntity] != nil) onLastEntityMarkerBuilt(e)
-  }
-  entity.destroy()
 }
 
 function manuallyConnectWires(
@@ -673,7 +678,6 @@ function manuallyConnectWires(
   wireType: defines.wire_type,
 ) {
   if (!connections) return
-  const knownLuaEntities = state.currentBlueprintPaste!.knownLuaEntities
   for (const { entity_id: otherId, circuit_id } of connections) {
     const otherEntity = knownLuaEntities[otherId]
     if (!otherEntity) continue
@@ -700,7 +704,6 @@ function manuallyConnectCircuits(luaEntity: LuaEntity, connections: BlueprintCir
 
 function manuallyConnectNeighbours(luaEntity: LuaEntity, connections: number[] | nil) {
   if (!connections || luaEntity.type != "electric-pole") return
-  const knownLuaEntities = state.currentBlueprintPaste!.knownLuaEntities
   for (const otherId of connections) {
     const otherEntity = knownLuaEntities[otherId]
     if (!otherEntity || otherEntity.type != "electric-pole") continue
@@ -708,131 +711,42 @@ function manuallyConnectNeighbours(luaEntity: LuaEntity, connections: number[] |
   }
 }
 
-let nameToType: EntityPrototypeInfo["nameToType"]
-OnEntityPrototypesLoaded.addListener((e) => {
-  nameToType = e.nameToType
-})
+// let nameToType: EntityPrototypeInfo["nameToType"]
+// OnEntityPrototypesLoaded.addListener((e) => {
+//   nameToType = e.nameToType
+// })
 
-const rawset = _G.rawset
+// const rawset = _G.rawset
 
-function handleEntityMarkerBuilt(e: OnBuiltEntityEvent, entity: LuaEntity, tags: MarkerTags): void {
-  const referencedName = tags.referencedName
-  if (!referencedName) return
-
-  const bpState = state.currentBlueprintPaste!
-
-  const { position, surface } = entity
-  let luaEntities = entity.surface.find_entities_filtered({
-    position,
-    radius: 0,
-    name: referencedName,
-  })
-  let usedPasteUpgrade = false
-  if (!next(luaEntities)[0]) {
-    if (!bpState.allowPasteUpgrades) return
-    const compatible = getCompatibleNames(referencedName)
-    if (!compatible) return
-    luaEntities = surface.find_entities_filtered({
-      position,
-      radius: 0,
-      name: compatible,
-    })
-    if (!next(luaEntities)[0]) return
-    usedPasteUpgrade = true
-  }
-
-  const entityId = tags.referencedLuaIndex
-  const value = bpState.entities[entityId - 1]
-
-  let entityDir = entity.direction
-  const isDiagonal = value.direction && value.direction % 2 == 1
-  if (isDiagonal) {
-    entityDir = (entityDir + (bpState.isFlipped ? 7 : 1)) % 8
-  }
-
-  const valueName = value.name
-  const type = nameToType.get(valueName)!
-  if (type == "storage-tank") {
-    entityDir = (entityDir + (bpState.isFlipped ? 2 : 0)) % 4
-  }
-  let luaEntity = luaEntities.find((e) => !e.supports_direction || e.direction == entityDir)
-  if (!luaEntity) {
-    // slower path, check for other directions
-    const pasteRotatableType = getPasteRotatableType(referencedName)
-    if (pasteRotatableType == nil) return
-    if (pasteRotatableType == PasteCompatibleRotationType.AnyDirection) {
-      luaEntity = luaEntities[0]
-    } else if (pasteRotatableType == PasteCompatibleRotationType.Flippable) {
-      const oppositeDir = oppositedirection(entityDir)
-      luaEntity = luaEntities.find((e) => e.direction == oppositeDir)
-      if (!luaEntity) return
-    } else {
-      assertNever(pasteRotatableType)
-    }
-  }
-
-  // performance hack: cache name, type
-  rawset(luaEntity, "name", luaEntity.name)
-  rawset(luaEntity, "type", type)
-
-  if (usedPasteUpgrade) {
-    bpState.usedPasteUpgrade = true
-  }
-
-  const stage = bpState.stage
-  const asmEntity = onEntityPossiblyUpdated(stage.assembly, luaEntity, stage.stageNumber, nil, e.player_index, value)
-
-  const { neighbours, connections } = value
-  if (!neighbours && !connections) return
-
-  if (asmEntity != nil) {
-    // check for circuit wires
-    if (!luaEntity.valid) {
-      // must have been upgraded
-      luaEntity = asmEntity.getWorldEntity(stage.stageNumber)
-      if (!luaEntity) return
-
-      bpState.needsManualConnections.push(entityId)
-    } else if (luaEntity.type == "transport-belt") {
-      // factorio bug? transport belts don't save circuit connections immediately when pasted
-      bpState.needsManualConnections.push(entityId)
-    } else {
-      onWiresPossiblyUpdated(stage.assembly, luaEntity, stage.stageNumber, e.player_index)
-    }
-  }
-
-  bpState.knownLuaEntities[entityId] = luaEntity // save the entity if it has wire connections
-}
-
-function onLastEntityMarkerBuilt(e: OnBuiltEntityEvent): void {
-  const {
-    entities,
-    knownLuaEntities,
-    needsManualConnections,
-    usedPasteUpgrade,
-    stage: { assembly, stageNumber },
-  } = state.currentBlueprintPaste!
-
-  for (const entityId of needsManualConnections) {
-    const value = entities[entityId - 1]
-    const luaEntity = knownLuaEntities[entityId]
-    if (!luaEntity) continue
-    manuallyConnectNeighbours(luaEntity, value.neighbours)
-    manuallyConnectCircuits(luaEntity, value.connections)
-    onWiresPossiblyUpdated(assembly, luaEntity, stageNumber, e.player_index)
-  }
-
-  const player = game.get_player(e.player_index)!
-
-  if (usedPasteUpgrade) {
-    player.print([L_Interaction.PasteUpgradeApplied])
-  }
-
-  const blueprint = getInnerBlueprint(player.cursor_stack)
-  revertPreparedBlueprint(assert(blueprint))
-  state.currentBlueprintPaste = nil
-}
-
+// function handleEntityMarkerBuilt(e: OnBuiltEntityEvent): void {
+//   const {
+//     entities,
+//     knownLuaEntities,
+//     needsManualConnections,
+//     usedPasteUpgrade,
+//     stage: { assembly, stageNumber },
+//   } = state.currentBlueprintPaste!
+//
+//   for (const entityId of needsManualConnections) {
+//     const value = entities[entityId - 1]
+//     const luaEntity = knownLuaEntities[entityId]
+//     if (!luaEntity) continue
+//     manuallyConnectNeighbours(luaEntity, value.neighbours)
+//     manuallyConnectCircuits(luaEntity, value.connections)
+//     onWiresPossiblyUpdated(assembly, luaEntity, stageNumber, e.player_index)
+//   }
+//
+//   const player = game.get_player(e.player_index)!
+//
+//   if (usedPasteUpgrade) {
+//     player.print([L_Interaction.PasteUpgradeApplied])
+//   }
+//
+//   const blueprint = getInnerBlueprint(player.cursor_stack)
+//   revertPreparedBlueprint(assert(blueprint))
+//   state.currentBlueprintPaste = nil
+// }
+//
 // Circuit wires and cables
 // There is no event for this, so we listen to player inputs to detect potential changes, and check during on_selected_entity_changed
 

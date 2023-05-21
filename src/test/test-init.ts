@@ -127,7 +127,7 @@ if ("factorio-test" in script.active_mods) {
     },
     log_passed_tests: false,
     sound_effects: true,
-    // test_pattern: "integration%-test",
+    test_pattern: "event%-listener",
   } satisfies Partial<FactorioTest.Config>)
   if (__DebugAdapter) {
     tagBlacklist.push("after_mod_reload")
@@ -231,7 +231,7 @@ Events.on_string_translated((e) => {
   }
 })
 
-commands.add_command("print-bp-settings", "", () => {
+commands.add_command("print-stage-bp-settings", "", () => {
   const player = game.player!
   const stage = getStageAtSurface(player.surface.index)
   if (!stage) return player.print("No stage at surface")
@@ -242,6 +242,16 @@ commands.add_command("print-bp-settings", "", () => {
   // player.print(serpent.block(settings))
   debugPrint(settings)
 })
+
+commands.add_command("print-bp-contents", "", () => {
+  const player = game.player!
+  const stack = player.cursor_stack
+  if (!stack?.is_blueprint) return player.print("not holding blueprint")
+
+  const contents = stack.get_blueprint_entities()
+  player.print(serpent.block(contents))
+})
+
 commands.add_command("perf", "", () => {
   const assembly = getAllAssemblies().find((a) => a.name.get() == "Test") ?? createUserAssembly("Test", 5)
   for (const stage of assembly.getAllStages()) {

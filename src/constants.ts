@@ -24,7 +24,7 @@ export enum FlexibleOffshorePumpPlacement {
 
 export const enum Prototypes {
   // used to handle blueprints
-  EntityMarker = "bp100:entity-marker",
+  // EntityMarker = "bp100:entity-marker",
   BlueprintPositionMarker = "bp100:blueprint-position-marker",
 
   PreviewEntityPrefix = "bp100:preview-entity-",

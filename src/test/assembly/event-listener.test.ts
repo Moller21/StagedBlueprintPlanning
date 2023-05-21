@@ -748,15 +748,17 @@ describe("blueprint paste", () => {
       },
     }
     player.cursor_stack!.set_blueprint_entities([bpEntity1, bpEntity2])
-
     const inserter1 = surface.create_entity({
       name: "inserter",
       position: pos,
       force: "player",
       direction: direction.west,
     })!
+    userActions.onEntityPossiblyUpdated.invokes((asm, entity) => {
+      if (!alreadyPresent) return nil
+      return { entity } as any
+    })
 
-    userActions.onEntityPossiblyUpdated.returns(alreadyPresent ? ({} as any) : nil)
     player.build_from_cursor({ position: pos })
 
     const inserter2 = surface.find_entities_filtered({
@@ -769,11 +771,11 @@ describe("blueprint paste", () => {
     assertCorrect(inserter1, nil, bpEntity1)
     assertCorrect(inserter2, pos.plus(Pos(1, 0)), bpEntity2)
     if (alreadyPresent) {
-      expect(userActions.onWiresPossiblyUpdated).calledWith(assembly, inserter1, 1, 1)
-      expect(userActions.onWiresPossiblyUpdated).calledWith(assembly, inserter2, 1, 1)
+      expect(userActions.onWiresPossiblyUpdatedOnAsmEntity).calledWith(assembly, { entity: inserter1 }, 1, 1)
+      expect(userActions.onWiresPossiblyUpdatedOnAsmEntity).calledWith(assembly, { entity: inserter2 }, 1, 1)
       expectedNumCalls = 4
     } else {
-      expect(userActions.onWiresPossiblyUpdated).not.called()
+      expect(userActions.onWiresPossiblyUpdatedOnAsmEntity).not.called()
       expectedNumCalls = 2
     }
   })
@@ -799,7 +801,10 @@ describe("blueprint paste", () => {
       force: "player",
     })!
 
-    userActions.onEntityPossiblyUpdated.returns(alreadyPresent ? ({} as any) : nil)
+    userActions.onEntityPossiblyUpdated.invokes((asm, entity) => {
+      if (!alreadyPresent) return nil
+      return { entity } as any
+    })
     player.build_from_cursor({ position: pos })
 
     const pole2 = surface.find_entity("small-electric-pole", pos.plus(Pos(1, 0)))!
@@ -808,11 +813,11 @@ describe("blueprint paste", () => {
     assertCorrect(pole1, nil, entity1)
     assertCorrect(pole2, pos.plus(Pos(1, 0)), entity2)
     if (alreadyPresent) {
-      expect(userActions.onWiresPossiblyUpdated).calledWith(assembly, pole1, 1, 1)
-      expect(userActions.onWiresPossiblyUpdated).calledWith(assembly, pole2, 1, 1)
+      expect(userActions.onWiresPossiblyUpdatedOnAsmEntity).calledWith(assembly, { entity: pole1 }, 1, 1)
+      expect(userActions.onWiresPossiblyUpdatedOnAsmEntity).calledWith(assembly, { entity: pole2 }, 1, 1)
       expectedNumCalls = 4
     } else {
-      expect(userActions.onWiresPossiblyUpdated).not.called()
+      expect(userActions.onWiresPossiblyUpdatedOnAsmEntity).not.called()
       expectedNumCalls = 2
     }
   })
