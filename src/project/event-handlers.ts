@@ -41,6 +41,7 @@ import {
   EntityPrototypeInfo,
   getCompatibleNames,
   getPasteRotatableType,
+  isPreviewEntity,
   OnEntityPrototypesLoaded,
   PasteCompatibleRotationType,
 } from "../entity/entity-prototype-info"
@@ -101,10 +102,9 @@ function luaEntityCreated(entity: LuaEntity, player: PlayerIndex | nil): void {
   }
   const stage = getStageAtSurface(entity.surface.index)
   if (!stage) return
-  if (!isWorldEntityProjectEntity(entity)) {
-    return checkNonProjectEntity(entity, stage, player)
+  if (isWorldEntityProjectEntity(entity)) {
+    onEntityCreated(stage.project, entity, stage.stageNumber, player)
   }
-  onEntityCreated(stage.project, entity, stage.stageNumber, player)
 }
 
 function luaEntityDeleted(entity: LuaEntity, player: PlayerIndex | nil): void {
@@ -133,11 +133,13 @@ function luaEntityRotated(entity: LuaEntity, previousDirection: defines.directio
   if (!stage) return
   if (isWorldEntityProjectEntity(entity)) {
     onEntityRotated(stage.project, entity, stage.stageNumber, previousDirection, player)
-    return
-  }
-  if (entity.name.startsWith(Prototypes.PreviewEntityPrefix)) {
+  } else if (entity.type == "entity-ghost" && entity.ghost_type == "underground-belt") {
+    const neighbor = entity.neighbours as LuaEntity | nil
+    if (neighbor && neighbor.type == "underground-belt") {
+      onEntityRotated(stage.project, neighbor, stage.stageNumber, previousDirection, player)
+    }
+  } else if (isPreviewEntity(entity)) {
     entity.direction = previousDirection
-    return
   }
 }
 
@@ -484,7 +486,6 @@ Events.on_built_entity((e) => {
   }
 
   if (!isWorldEntityProjectEntity(entity)) {
-    checkNonProjectEntity(entity, stage, playerIndex)
     return
   }
 
@@ -494,18 +495,6 @@ Events.on_built_entity((e) => {
     registerUndoActionLater(undoAction)
   }
 })
-
-function checkNonProjectEntity(entity: LuaEntity, stage: Stage, byPlayer: PlayerIndex | nil): void {
-  // always revive ghost undergrounds
-  if (entity.type == "entity-ghost" && entity.ghost_type == "underground-belt") {
-    const [, newEntity] = entity.silent_revive()
-    if (newEntity) {
-      onEntityCreated(stage.project, newEntity, stage.stageNumber, byPlayer)
-    } else if (entity.valid) {
-      entity.destroy()
-    }
-  }
-}
 
 function tryFastReplace(entity: LuaEntity, stage: Stage, player: PlayerIndex) {
   const { toBeFastReplaced } = state

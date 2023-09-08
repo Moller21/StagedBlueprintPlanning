@@ -578,45 +578,32 @@ describe("stage move tool", () => {
   })
 })
 
-describe("revives ghost undergrounds", () => {
+describe("can rotate ghost underground", () => {
   test("by player", () => {
-    const pos = Pos(4.5, 0.5)
-    player.cursor_stack!.set_stack("underground-belt")
-    player.build_from_cursor({
-      position: pos,
-      alt: true,
-    })
-    const underground = surface.find_entities_filtered({
+    const pos1 = Pos(4.5, 0.5) // ->
+    const pos2 = Pos(5.5, 0.5) // >-
+    const underground1 = surface.create_entity({
       name: "underground-belt",
-      limit: 1,
-    })[0]
-    expect(underground).to.be.any()
-    expect(underground.position).to.equal(pos)
-    const ghosts = surface.find_entities_filtered({
-      type: "entity-ghost",
-      limit: 1,
-    })[0]
-    expect(ghosts).to.be.nil()
-
-    expect(userActions.onEntityCreated).calledWith(project, underground, 1, 1)
-  })
-  test("by script", () => {
-    const pos = Pos(4.5, 0.5)
-    const undergroundGhost = surface.create_entity({
+      position: pos1,
+      direction: direction.east,
+      type: "input",
+    })
+    expect(underground1).not.toBeNil()
+    const underground2 = surface.create_entity({
       name: "entity-ghost",
       inner_name: "underground-belt",
-      position: pos,
-      force: "player",
-      raise_built: true,
+      position: pos2,
+      direction: direction.east,
+      type: "output",
+    })!
+    expect(underground2).not.toBeNil()
+
+    const [rotated] = underground2.rotate({
+      by_player: player,
     })
-    expect(undergroundGhost?.valid).to.be.falsy()
-    const underground = surface.find_entities_filtered({
-      name: "underground-belt",
-      limit: 1,
-    })[0]
-    expect(underground).to.be.any()
-    expect(underground.position).to.equal(pos)
-    expect(userActions.onEntityCreated).calledWith(project, underground, 1, nil)
+    expect(rotated).toBe(true)
+
+    expect(userActions.onEntityRotated).toHaveBeenCalledWith(project, underground1, 1, direction.east, 1)
   })
 })
 
