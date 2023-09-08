@@ -200,18 +200,20 @@ function createEntity(
   direction: defines.direction,
   entity: Entity,
   changed: boolean = true,
-): LuaEntity | nil {
+): LuaMultiReturn<[luaEntity: LuaEntity | nil, hasError?: boolean]> {
   assume<BlueprintEntity>(entity)
   if (changed) entityVersion++
   const luaEntity = tryCreateUnconfiguredEntity(surface, position, direction, entity)
-  if (!luaEntity) return nil
-  // const type = luaEntity.type
+  if (!luaEntity) return $multi(nil)
+
   const type = nameToType.get(entity.name)!
+  // performance hack: cache name, type
+  rawset(luaEntity, "name", entity.name)
+  rawset(luaEntity, "type", type)
+
   if (type == "underground-belt") {
-    if (luaEntity.belt_to_ground_type != entity.type) {
-      luaEntity.destroy()
-      return nil
-    }
+    const hasError = luaEntity.belt_to_ground_type != entity.type
+    return $multi(luaEntity, hasError)
   } else if (type == "loader" || type == "loader-1x1") {
     luaEntity.loader_type = entity.type ?? "output"
     luaEntity.direction = direction
@@ -221,18 +223,14 @@ function createEntity(
     if (ghost) {
       luaEntity.destroy()
       ghost.destroy()
-      return nil
+      return $multi(nil)
     }
   }
   if (entity.items) {
     createItems(luaEntity, entity.items)
   }
 
-  // performance hack: cache name, type
-  rawset(luaEntity, "name", entity.name)
-  rawset(luaEntity, "type", type)
-
-  return luaEntity
+  return $multi(luaEntity)
 }
 
 function entityHasSettings(entity: BlueprintEntity): boolean {
@@ -305,7 +303,7 @@ function updateUndergroundRotation(
   luaEntity: LuaEntity,
   value: BlueprintEntity,
   direction: defines.direction,
-): LuaEntity | nil {
+): LuaMultiReturn<[luaEntity: LuaEntity | nil, hasError?: boolean, updatedNeighbor?: LuaEntity]> {
   if (
     getUndergroundDirection(direction, value.type) !=
     getUndergroundDirection(luaEntity.direction, luaEntity.belt_to_ground_type)
@@ -316,13 +314,22 @@ function updateUndergroundRotation(
     return createEntity(surface, position, direction, value, false)
   }
   const mode = value.type ?? "input"
-  if (luaEntity.belt_to_ground_type != mode) {
-    const wasRotatable = luaEntity.rotatable
-    luaEntity.rotatable = true
-    luaEntity.rotate()
-    luaEntity.rotatable = wasRotatable
+  if (luaEntity.belt_to_ground_type == mode) {
+    return $multi(luaEntity, false)
   }
-  return luaEntity
+
+  const wasRotatable = luaEntity.rotatable
+  luaEntity.rotatable = true
+  const [rotated] = luaEntity.rotate()
+  luaEntity.rotatable = wasRotatable
+
+  if (!rotated) return $multi(luaEntity, true)
+
+  const neighbor = luaEntity.neighbours as LuaEntity | nil
+  if (neighbor && neighbor.type == "underground-belt") {
+    return $multi(luaEntity, false, neighbor)
+  }
+  return $multi(luaEntity, false)
 }
 
 function updateRollingStock(luaEntity: LuaEntity, value: BlueprintEntity): void {
@@ -361,7 +368,7 @@ function updateEntity(
   value: Entity,
   direction: defines.direction,
   changed: boolean = true,
-): LuaEntity | nil {
+): LuaMultiReturn<[luaEntity: LuaEntity | nil, hasError?: boolean, updatedNeighbor?: LuaEntity]> {
   assume<BlueprintEntity>(value)
   if (changed) entityVersion++
 
@@ -378,7 +385,7 @@ function updateEntity(
     luaEntity.loader_type = value.type ?? "output"
   } else if (rollingStockTypes.has(type)) {
     updateRollingStock(luaEntity, value)
-    return luaEntity
+    return $multi(luaEntity)
   }
   luaEntity.direction = direction
 
@@ -387,7 +394,7 @@ function updateEntity(
   if (ghost) ghost.destroy() // should not happen?
   matchItems(luaEntity, value)
 
-  return luaEntity
+  return $multi(luaEntity)
 }
 
 function makePreviewIndestructible(entity: LuaEntity | nil): void {

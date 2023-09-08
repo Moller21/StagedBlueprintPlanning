@@ -124,7 +124,7 @@ describe("updateWorldEntities", () => {
       const replaced = createEntity(project.getSurface(2)!, entity.position, entity.direction, {
         name: "inserter",
         override_stack_size: 3,
-      } as TestEntity)!
+      } as TestEntity)[0]!
       entity.replaceWorldEntity(2, replaced)
       WorldUpdater.refreshWorldEntityAtStage(project, entity, 2)
       const val = assertEntityCorrect(2)
@@ -184,7 +184,7 @@ describe("updateWorldEntities", () => {
       const luaEntity = createEntity(project.getSurface(3)!, entity.position, entity.direction, {
         name: "inserter",
         override_stack_size: 3,
-      } as TestEntity)!
+      } as TestEntity)[0]!
       entity.replaceWorldEntity(3, luaEntity)
     }
     WorldUpdater.updateWorldEntities(project, entity, 1)

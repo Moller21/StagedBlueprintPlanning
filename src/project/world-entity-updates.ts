@@ -98,17 +98,18 @@ function updateWorldEntitiesInRange(
     if (value != nil) {
       // create entity or updating existing entity
       let luaEntity: LuaEntity | nil
+      let hasError: boolean | nil
       if (existingNormalEntity) {
-        luaEntity = updateEntity(existingNormalEntity, value, direction, changed)
+        ;[luaEntity, hasError] = updateEntity(existingNormalEntity, value, direction, changed)
       } else {
-        luaEntity = createEntity(surface, entity.position, direction, value, changed)
+        ;[luaEntity, hasError] = createEntity(surface, entity.position, direction, value, changed)
       }
 
       if (luaEntity) {
         setEntityUpdateable(luaEntity, stage == firstStage)
         entity.replaceWorldOrPreviewEntity(stage, luaEntity)
         // now is not preview entity, so error state changed
-        if (wasPreviewEntity) hasOrResolvedError = true
+        if (wasPreviewEntity || hasError) hasOrResolvedError = true
 
         continue
       }
