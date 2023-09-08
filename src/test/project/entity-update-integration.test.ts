@@ -21,7 +21,7 @@ import { emptyBeltControlBehavior, emptyInserterControlBehavior } from "../../en
 import { isPreviewEntity } from "../../entity/entity-prototype-info"
 import { ProjectEntity, RollingStockProjectEntity, StageNumber } from "../../entity/ProjectEntity"
 import { saveEntity } from "../../entity/save-load"
-import { addPowerSwitchConnections, findPolePowerSwitchNeighbors } from "../../entity/wires"
+import { addPowerSwitchConnections } from "../../entity/wires"
 import { Events } from "../../lib"
 import { BBox, Pos } from "../../lib/geometry"
 import { runEntireCurrentTask } from "../../lib/task"
@@ -180,7 +180,7 @@ function assertEntityCorrect(entity: ProjectEntity, expectedHasMissing: number |
       if (!worldEntity) continue
       const wireNeighbors: CircuitOrPowerSwitchConnection[] | nil = worldEntity.circuit_connection_definitions
       if (!wireNeighbors) continue
-      addPowerSwitchConnections(worldEntity, wireNeighbors, findPolePowerSwitchNeighbors(worldEntity))
+      addPowerSwitchConnections(worldEntity, wireNeighbors)
       expect(wireNeighbors).to.equal([])
     }
   } else {
@@ -196,7 +196,7 @@ function assertEntityCorrect(entity: ProjectEntity, expectedHasMissing: number |
         }))
       })
       const actualNeighbors: CircuitOrPowerSwitchConnection[] = thisWorldEntity.circuit_connection_definitions ?? []
-      addPowerSwitchConnections(thisWorldEntity, actualNeighbors, findPolePowerSwitchNeighbors(thisWorldEntity))
+      addPowerSwitchConnections(thisWorldEntity, actualNeighbors)
 
       const actualNeighborsSet = actualNeighbors.map((x) => ({
         wire: x.wire,

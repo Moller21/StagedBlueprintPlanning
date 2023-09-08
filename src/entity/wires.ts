@@ -9,7 +9,7 @@
  * You should have received a copy of the GNU Lesser General Public License along with Staged Blueprint Planning. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { CircuitConnectionDefinition, LuaEntity, WireConnectionDefinition } from "factorio:runtime"
+import { CircuitConnectionDefinition, LuaEntity } from "factorio:runtime"
 import { isEmpty } from "../lib"
 import {
   circuitConnectionMatches,
@@ -27,81 +27,32 @@ import { ProjectEntity, StageNumber } from "./ProjectEntity"
 import wire_connection_id = defines.wire_connection_id
 import wire_type = defines.wire_type
 
-export function getPowerSwitchConnectionSide(pole: LuaEntity, powerSwitch: LuaEntity): defines.wire_connection_id {
-  // hack to patch hole in the modding api
-
-  const neighbors = (powerSwitch.neighbours as { copper: LuaEntity[] }).copper
-
-  // we try disconnecting on one side, and see if actually disconnected, to get the side
-  const leftConnection: WireConnectionDefinition = {
-    target_entity: powerSwitch,
-    wire: defines.wire_type.copper,
-    target_wire_id: defines.wire_connection_id.power_switch_left,
-  }
-  pole.disconnect_neighbour(leftConnection)
-  const newNeighbors = (powerSwitch.neighbours as { copper: LuaEntity[] }).copper
-  if (newNeighbors.length < neighbors.length) {
-    // we disconnected the left side, so it is on the left
-    // add back test disconnect
-    pole.connect_neighbour(leftConnection)
-    return defines.wire_connection_id.power_switch_left
-  }
-  // nothing happened, so it is on the right side
-  return defines.wire_connection_id.power_switch_right
-}
-
-export function findPolePowerSwitchNeighbors(entity: LuaEntity): LuaEntity[] | nil {
-  if (entity.type != "electric-pole") return
-  let result: LuaEntity[] | nil = nil
-  const neighbors = (entity.neighbours as { copper: LuaEntity[] }).copper
-  for (const neighbor of neighbors) {
-    if (neighbor.type == "power-switch") {
-      result ??= []
-      result.push(neighbor)
-    }
-  }
-  return result
-}
-
 export function addPowerSwitchConnections(
   thisEntity: LuaEntity,
   existingConnections: CircuitOrPowerSwitchConnection[],
-  polePowerSwitchNeighbors: LuaEntity[] | nil,
 ): void {
-  if (polePowerSwitchNeighbors) {
-    for (const neighbor of polePowerSwitchNeighbors) {
-      let side: defines.wire_connection_id
-      const existing = existingConnections.find((c) => c.target_entity == neighbor)
-      if (existing) {
-        // multiple connections to the same switch must be connected to the other side
-        // 1 -> 2, 2 -> 1
-        side = existing.target_circuit_id == 1 ? 2 : 1
-      } else {
-        side = getPowerSwitchConnectionSide(thisEntity, neighbor)
+  const thisType = thisEntity.type
+  if (thisType == "electric-pole") {
+    for (const copperConnectionDefinition of thisEntity.copper_connection_definitions) {
+      if (copperConnectionDefinition.target_entity.type == "power-switch") {
+        existingConnections.push({
+          wire: defines.wire_type.copper,
+          target_entity: copperConnectionDefinition.target_entity,
+          source_circuit_id: copperConnectionDefinition.source_wire_connector,
+          target_circuit_id: copperConnectionDefinition.target_wire_connector,
+        })
       }
-      existingConnections.push({
-        wire: defines.wire_type.copper,
-        target_entity: neighbor,
-        source_circuit_id: defines.wire_connection_id.electric_pole,
-        target_circuit_id: side,
-      })
     }
-  } else if (thisEntity.type == "power-switch") {
-    const neighbors = (thisEntity.neighbours as { copper: LuaEntity[] }).copper
-    for (const neighbor of neighbors) {
-      let side: defines.wire_connection_id
-      if (existingConnections[0] && existingConnections[0].target_entity == neighbor) {
-        // the same pole connected to both sides
-        side = existingConnections[0].target_circuit_id == 1 ? 2 : 1
-      } else {
-        side = getPowerSwitchConnectionSide(neighbor, thisEntity)
+  } else if (thisType == "power-switch") {
+    for (const copperConnectionDefinition of thisEntity.copper_connection_definitions) {
+      if (copperConnectionDefinition.target_entity.type == "electric-pole") {
+        existingConnections.push({
+          wire: defines.wire_type.copper,
+          target_entity: copperConnectionDefinition.target_entity,
+          source_circuit_id: copperConnectionDefinition.source_wire_connector,
+          target_circuit_id: copperConnectionDefinition.target_wire_connector,
+        })
       }
-      existingConnections.push({
-        wire: defines.wire_type.copper,
-        target_entity: neighbor,
-        source_circuit_id: side,
-        target_circuit_id: defines.wire_connection_id.electric_pole,
-      })
     }
   }
 }
@@ -114,7 +65,7 @@ function updateCircuitConnections(
 ): void {
   const existingConnections = luaEntity.circuit_connection_definitions
   if (!existingConnections) return
-  addPowerSwitchConnections(luaEntity, existingConnections, findPolePowerSwitchNeighbors(luaEntity))
+  addPowerSwitchConnections(luaEntity, existingConnections)
 
   const projectConnections = content.getCircuitConnections(entity)
 
@@ -186,7 +137,11 @@ function updateCableConnections(
   const projectConnections = content.getCableConnections(entity)
 
   const matching = new LuaSet<ProjectEntity>()
-  const existingConnections = (luaEntity.neighbours as { copper?: LuaEntity[] }).copper
+  const existingConnections = (
+    luaEntity.neighbours as {
+      copper?: LuaEntity[]
+    }
+  ).copper
   if (existingConnections) {
     for (const otherLuaEntity of existingConnections) {
       if (otherLuaEntity.type == "power-switch") continue // handled by circuit connections
@@ -224,14 +179,13 @@ function saveCircuitConnections(
   content: MutableProjectContent,
   entity: ProjectEntity,
   stage: StageNumber,
-  polePowerSwitchNeighbors: LuaEntity[] | nil, // passed around to avoid recomputing
 ): LuaMultiReturn<[hasDiff: boolean, additionalEntitiesToUpdate?: ProjectEntity[]]> {
   const luaEntity = entity.getWorldEntity(stage)
   if (!luaEntity) return $multi(false)
   const existingConnections: CircuitOrPowerSwitchConnection[] | nil = luaEntity.circuit_connection_definitions
   if (!existingConnections) return $multi(false)
 
-  addPowerSwitchConnections(luaEntity, existingConnections, polePowerSwitchNeighbors)
+  addPowerSwitchConnections(luaEntity, existingConnections)
 
   const projectConnections = content.getCircuitConnections(entity)
 
@@ -317,26 +271,25 @@ function saveCableConnections(
   entity: ProjectEntity,
   stage: StageNumber,
   additionalStageForConnections: StageNumber | nil,
-): LuaMultiReturn<[hasAnyDiff: boolean, maxConnectionsExceeded?: boolean, polePowerSwitchConnections?: LuaEntity[]]> {
+): LuaMultiReturn<[hasAnyDiff: boolean, maxConnectionsExceeded?: boolean]> {
   const luaEntity = entity.getWorldEntity(stage)
   if (!luaEntity || luaEntity.type != "electric-pole") return $multi(false)
-  const worldConnections = (luaEntity.neighbours as { copper?: LuaEntity[] }).copper
+  const worldConnections = (
+    luaEntity.neighbours as {
+      copper?: LuaEntity[]
+    }
+  ).copper
   const savedConnections = content.getCableConnections(entity)
 
   const matchingConnections = new LuaSet<ProjectEntity>()
   const newConnections = new LuaSet<ProjectEntity>()
-  let polePowerSwitchConnections: LuaEntity[] | nil = nil
 
   if (worldConnections) {
     for (const otherLuaEntity of worldConnections) {
       const otherEntity = content.findCompatibleWithLuaEntity(otherLuaEntity, nil, stage)
       if (!otherEntity) continue
 
-      if (otherLuaEntity.type == "power-switch") {
-        polePowerSwitchConnections ??= []
-        polePowerSwitchConnections.push(otherLuaEntity)
-        continue
-      }
+      if (otherLuaEntity.type == "power-switch") continue
       if (!savedConnections || !savedConnections.has(otherEntity)) {
         newConnections.add(otherEntity)
       } else {
@@ -349,7 +302,11 @@ function saveCableConnections(
     // only add connections to entities higher than this stage
     const higherEntity = entity.getWorldEntity(additionalStageForConnections)
     if (higherEntity) {
-      const higherConnections = (higherEntity.neighbours as { copper?: LuaEntity[] }).copper
+      const higherConnections = (
+        higherEntity.neighbours as {
+          copper?: LuaEntity[]
+        }
+      ).copper
       if (higherConnections) {
         for (const otherLuaEntity of higherConnections) {
           if (otherLuaEntity.type == "power-switch") continue // don't care about power switches for additional stage
@@ -384,7 +341,7 @@ function saveCableConnections(
     if (result == CableAddResult.MaxConnectionsReached) maxConnectionsExceeded = true
   }
 
-  return $multi(hasDiff, maxConnectionsExceeded, polePowerSwitchConnections)
+  return $multi(hasDiff, maxConnectionsExceeded)
 }
 
 function saveWireConnections(
@@ -395,13 +352,8 @@ function saveWireConnections(
 ): LuaMultiReturn<
   [hasAnyDiff: boolean, maxConnectionsExceeded?: boolean, additionalEntitiesToUpdate?: ProjectEntity[]]
 > {
-  const [diff2, maxConnectionsExceeded, polePowerSwitchConnections] = saveCableConnections(
-    content,
-    entity,
-    stage,
-    higherStageForMerging,
-  )
-  const [diff1, additionalEntitiesToUpdate] = saveCircuitConnections(content, entity, stage, polePowerSwitchConnections)
+  const [diff2, maxConnectionsExceeded] = saveCableConnections(content, entity, stage, higherStageForMerging)
+  const [diff1, additionalEntitiesToUpdate] = saveCircuitConnections(content, entity, stage)
 
   return $multi(diff1 || diff2, maxConnectionsExceeded, additionalEntitiesToUpdate)
 }
